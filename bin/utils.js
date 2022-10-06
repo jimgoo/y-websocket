@@ -19,6 +19,8 @@ const wsReadyStateOpen = 1
 const wsReadyStateClosing = 2 // eslint-disable-line
 const wsReadyStateClosed = 3 // eslint-disable-line
 
+const debug = process.env.DEBUG_MODE || false
+
 // disable gc when using snapshots!
 const gcEnabled = process.env.GC !== 'false' && process.env.GC !== '0'
 const persistenceDir = process.env.YPERSISTENCE
@@ -34,16 +36,20 @@ if (typeof persistenceDir === 'string') {
   persistence = {
     provider: ldb,
     bindState: async (docName, ydoc) => {
+      if (debug) console.log("---> bindState: docName=", docName)
       const persistedYdoc = await ldb.getYDoc(docName)
       const newUpdates = Y.encodeStateAsUpdate(ydoc)
       ldb.storeUpdate(docName, newUpdates)
       Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(persistedYdoc))
       ydoc.on('update', update => {
+        if (debug) console.log("---> bindState ydoc.update (store in ldb): docName=", docName, "update=", update)
         ldb.storeUpdate(docName, update)
       })
     },
     writeState: async (docName, ydoc) => {}
   }
+} else {
+  console.info('---> Not persisting documents')
 }
 
 /**
@@ -82,6 +88,9 @@ const updateHandler = (update, origin, doc) => {
   syncProtocol.writeUpdate(encoder, update)
   const message = encoding.toUint8Array(encoder)
   doc.conns.forEach((_, conn) => send(doc, conn, message))
+  // `message` is the actual document data
+  if (debug) console.info("---> messageSync updateHandler: n_conns", doc.conns.length, 
+    "doc.name=", doc.name, "origin=", origin, "message=", message, "update=", update)
 }
 
 class WSSharedDoc extends Y.Doc {
@@ -122,6 +131,8 @@ class WSSharedDoc extends Y.Doc {
       this.conns.forEach((_, c) => {
         send(this, c, buff)
       })
+      if (debug) console.info("---> awarenessChangeHandler: n_conns", this.conns.length, "doc.name=", this.name, "awareness=", this.awareness, 
+      "changedClients=", changedClients)
     }
     this.awareness.on('update', awarenessChangeHandler)
     this.on('update', updateHandler)
@@ -143,6 +154,7 @@ class WSSharedDoc extends Y.Doc {
  * @return {WSSharedDoc}
  */
 const getYDoc = (docname, gc = true) => map.setIfUndefined(docs, docname, () => {
+  if (debug) console.log("---> getYDoc: docname=", docname, "gc=", gc)
   const doc = new WSSharedDoc(docname)
   doc.gc = gc
   if (persistence !== null) {
@@ -198,6 +210,7 @@ const closeConn = (doc, conn) => {
      */
     // @ts-ignore
     const controlledIds = doc.conns.get(conn)
+    if (debug) console.log("---> closeConn: controlledIds=", controlledIds)
     doc.conns.delete(conn)
     awarenessProtocol.removeAwarenessStates(doc.awareness, Array.from(controlledIds), null)
     if (doc.conns.size === 0 && persistence !== null) {
